@@ -1,6 +1,5 @@
 name: CI/CD for Shopping Site (Frontend + Backend)
 
-
 on:
   workflow_dispatch:
 
@@ -11,7 +10,7 @@ on:
 env:
   AWS_REGION: us-west-2
   ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com
-  
+
   FRONTEND_SERVICES: "main appliances auto beauty books computers earphones electronics fashion food furniture googlegrocery googlemusic googlepay home mobiles sports toys two-wheelers"
   BACKEND_SERVICE: "backend"
 
@@ -23,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       # -------------------------
       # Checkout
       # -------------------------
@@ -48,35 +48,70 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       # -------------------------
+      # Debug Repo Structure
+      # -------------------------
+      - name: 🐞 Debug Folder Structure
+        run: |
+          echo "Current Directory:"
+          pwd
+
+          echo "Repository Files:"
+          ls -la
+
+          echo "Frontend folders:"
+          ls -la frontend || true
+
+          echo "Backend folder:"
+          ls -la backend || true
+
+      # -------------------------
       # Build & Push Images
       # -------------------------
       - name: 🛠 Build and Push Docker Images
         run: |
           set -e
+
           IMAGE_TAG="${GITHUB_SHA}"
 
           # -------- Frontend --------
           for service in $FRONTEND_SERVICES; do
+
             FOLDER="frontend/$service"
             REPO_NAME="shopping-site-$service"
             IMAGE_URI="$ECR_REGISTRY/$REPO_NAME:$IMAGE_TAG"
 
-            if [ ! -f "$FOLDER/Dockerfile" ]; then
-              echo "⚠️ No Dockerfile in $FOLDER, skipping..."
+            echo "----------------------------------"
+            echo "🚀 Processing Service: $service"
+            echo "📁 Folder: $FOLDER"
+
+            if [ ! -d "$FOLDER" ]; then
+              echo "❌ Folder not found: $FOLDER"
               continue
             fi
 
-            echo "🚀 Building $service"
+            if [ ! -f "$FOLDER/Dockerfile" ]; then
+              echo "⚠️ Dockerfile missing in $FOLDER"
+              continue
+            fi
+
+            echo "📂 Folder files:"
+            ls -la $FOLDER
 
             aws ecr describe-repositories --repository-names $REPO_NAME >/dev/null 2>&1 || \
               aws ecr create-repository \
                 --repository-name $REPO_NAME \
                 --image-scanning-configuration scanOnPush=true
 
-            docker build -t $IMAGE_URI $FOLDER
+            echo "🐳 Building Docker image..."
+            docker build -f $FOLDER/Dockerfile -t $IMAGE_URI $FOLDER
+
+            echo "📤 Pushing image..."
             docker push $IMAGE_URI
 
-            sed -i "s|image:.*|image: $IMAGE_URI|g" "$FOLDER/deployment.yml"
+            if [ -f "$FOLDER/deployment.yml" ]; then
+              sed -i "s|image:.*|image: $IMAGE_URI|g" "$FOLDER/deployment.yml"
+            fi
+
           done
 
           # -------- Backend --------
@@ -84,17 +119,36 @@ jobs:
           REPO_NAME="shopping-site-backend"
           IMAGE_URI="$ECR_REGISTRY/$REPO_NAME:$IMAGE_TAG"
 
-          echo "🚀 Building backend"
+          echo "----------------------------------"
+          echo "🚀 Processing Backend"
+
+          if [ ! -d "$FOLDER" ]; then
+            echo "❌ Backend folder missing"
+            exit 1
+          fi
+
+          if [ ! -f "$FOLDER/Dockerfile" ]; then
+            echo "❌ Backend Dockerfile missing"
+            exit 1
+          fi
+
+          echo "📂 Backend files:"
+          ls -la $FOLDER
 
           aws ecr describe-repositories --repository-names $REPO_NAME >/dev/null 2>&1 || \
             aws ecr create-repository \
               --repository-name $REPO_NAME \
               --image-scanning-configuration scanOnPush=true
 
-          docker build -t $IMAGE_URI $FOLDER
+          echo "🐳 Building Backend Image..."
+          docker build -f $FOLDER/Dockerfile -t $IMAGE_URI $FOLDER
+
+          echo "📤 Pushing Backend Image..."
           docker push $IMAGE_URI
 
-          sed -i "s|image:.*|image: $IMAGE_URI|g" "$FOLDER/backend-deployment.yml"
+          if [ -f "$FOLDER/backend-deployment.yml" ]; then
+            sed -i "s|image:.*|image: $IMAGE_URI|g" "$FOLDER/backend-deployment.yml"
+          fi
 
       # -------------------------
       # Commit YAML changes
@@ -105,10 +159,11 @@ jobs:
           git config --global user.email "actions@github.com"
 
           git add frontend/**/deployment.yml backend/backend-deployment.yml
+
           git commit -m "🔄 Update image tags after build [skip ci]" || echo "No changes"
+
           git push origin main || echo "Nothing to push"
 
-      
       # -------------------------
       # Prevent CI loop
       # -------------------------
